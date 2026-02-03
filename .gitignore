@@ -56,3 +56,5 @@ host_tests/test_telemetry_buf
 
 target/
 *.rs.bk
+
+frontend/dist/
