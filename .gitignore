@@ -52,7 +52,8 @@ sdkconfig.*
 dependencies.lock
 managed_components/
 
-host_tests/test_telemetry_buf
+**/host_tests/test_telemetry_buf
+node/build/
 
 target/
 *.rs.bk
