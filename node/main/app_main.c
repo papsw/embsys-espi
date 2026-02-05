@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/event_groups.h"
 #include "esp_system.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -19,8 +20,8 @@
 #include "cJSON.h"
 #include "driver/gpio.h"
 #include "telemetry_buf.h"
+#include "cmd_parse.h"
 
-//todo
 static const char *TAG = "esp_node";
 #define SSID "net"
 #define PASS "pass"
@@ -28,18 +29,37 @@ static const char *TAG = "esp_node";
 #define DEVID "esp32-01"
 #define LEDPIN 2
 
+#define WIFI_CONNECTED BIT0
+
 static SemaphoreHandle_t mtx;
+static EventGroupHandle_t wifi_eg;
 static volatile int led_state = 0;
 static volatile int period = 2000;
 static char bootid[16];
 static uint32_t seqnum = 0;
 
+static void wifi_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        ESP_LOGW(TAG, "wifi lost, reconnecting");
+        xEventGroupClearBits(wifi_eg, WIFI_CONNECTED);
+        esp_wifi_connect();
+    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        ESP_LOGI(TAG, "wifi connected");
+        xEventGroupSetBits(wifi_eg, WIFI_CONNECTED);
+    }
+}
+
 static void wifi_init(void) {
+    wifi_eg = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
     wifi_init_config_t c = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&c));
+
+    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &wifi_handler, NULL);
+    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_handler, NULL);
+
     wifi_config_t wc = { 0 };
     strncpy((char*)wc.sta.ssid, SSID, sizeof wc.sta.ssid);
     strncpy((char*)wc.sta.password, PASS, sizeof wc.sta.password);
@@ -47,6 +67,9 @@ static void wifi_init(void) {
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(esp_wifi_connect());
+
+    // block until we have an IP
+    xEventGroupWaitBits(wifi_eg, WIFI_CONNECTED, false, true, portMAX_DELAY);
 }
 
 static int64_t getms(void) { return esp_timer_get_time() / 1000; }
@@ -77,27 +100,17 @@ static esp_err_t httpget(const char *url, char *buf, int len) {
     esp_http_client_config_t cfg = { .url = url, .timeout_ms = 1500 };
     esp_http_client_handle_t h = esp_http_client_init(&cfg);
     esp_http_client_set_method(h, HTTP_METHOD_GET);
-    esp_err_t e = esp_http_client_perform(h);
+    esp_err_t e = esp_http_client_open(h, 0);
     if (e != ESP_OK) { esp_http_client_cleanup(h); return e; }
+    int clen = esp_http_client_fetch_headers(h);
     int code = esp_http_client_get_status_code(h);
     if (code < 200 || code >= 300) { esp_http_client_cleanup(h); return ESP_FAIL; }
-    int n = esp_http_client_read_response(h, buf, len - 1);
+    int toread = (clen > 0 && clen < len - 1) ? clen : len - 1;
+    int n = esp_http_client_read(h, buf, toread);
     buf[n < 0 ? 0 : n] = 0;
+    esp_http_client_close(h);
     esp_http_client_cleanup(h);
     return ESP_OK;
-}
-
-static cJSON* mktelemetry(telemetry_t *t) {
-    cJSON *j = cJSON_CreateObject();
-    cJSON_AddStringToObject(j, "device_id", t->device_id);
-    cJSON_AddStringToObject(j, "boot_id", t->boot_id);
-    cJSON_AddNumberToObject(j, "seq", t->seq);
-    cJSON_AddNumberToObject(j, "uptime_ms", t->uptime_ms);
-    cJSON_AddNumberToObject(j, "rssi", t->rssi);
-    cJSON_AddNumberToObject(j, "free_heap", t->free_heap);
-    cJSON_AddNumberToObject(j, "led", t->led);
-    cJSON_AddNumberToObject(j, "ts_ms", (double)t->ts_ms);
-    return j;
 }
 
 static void telem_task(void *arg) {
@@ -110,8 +123,7 @@ static void telem_task(void *arg) {
         t.uptime_ms = (uint32_t)(esp_timer_get_time() / 1000);
         t.rssi = rssi(); t.free_heap = esp_get_free_heap_size(); t.led = led_state ? 1 : 0;
 
-        cJSON *j = mktelemetry(&t);
-        char *s = cJSON_PrintUnformatted(j); cJSON_Delete(j);
+        char *s = telemetry_to_json(&t);
         esp_err_t r = postjson(url, s);
 
         xSemaphoreTake(mtx, portMAX_DELAY);
@@ -121,8 +133,7 @@ static void telem_task(void *arg) {
         } else {
             telemetry_t tmp; int flushed = 0;
             for (int i = 0; i < 10 && telemetry_buf_pop(&tmp); i++) {
-                cJSON *j2 = mktelemetry(&tmp);
-                char *s2 = cJSON_PrintUnformatted(j2); cJSON_Delete(j2);
+                char *s2 = telemetry_to_json(&tmp);
                 if (postjson(url, s2) != ESP_OK) { free(s2); telemetry_buf_push(&tmp); break; }
                 free(s2); flushed++;
             }
@@ -139,38 +150,23 @@ static void cmd_task(void *arg) {
     while (1) {
         snprintf(url, 256, "%s/api/v1/commands/next?device_id=%s&boot_id=%s", SRV, DEVID, bootid);
         if (httpget(url, buf, 512) == ESP_OK) {
-            cJSON *root = cJSON_Parse(buf);
-            if (root) {
-                cJSON *cmd = cJSON_GetObjectItem(root, "command");
-                if (cmd && !cJSON_IsNull(cmd)) {
-                    cJSON *id = cJSON_GetObjectItem(cmd, "id");
-                    cJSON *tp = cJSON_GetObjectItem(cmd, "type");
-                    cJSON *pl = cJSON_GetObjectItem(cmd, "payload");
-                    if (cJSON_IsNumber(id) && cJSON_IsString(tp) && cJSON_IsObject(pl)) {
-                        long cid = (long)id->valuedouble;
-                        const char *ctype = tp->valuestring;
-                        if (strcmp(ctype, "set_led") == 0) {
-                            cJSON *v = cJSON_GetObjectItem(pl, "value");
-                            if (cJSON_IsNumber(v)) setled((int)v->valuedouble);
-                        } else if (strcmp(ctype, "set_period") == 0) {
-                            cJSON *m = cJSON_GetObjectItem(pl, "ms");
-                            if (cJSON_IsNumber(m)) {
-                                int p = (int)m->valuedouble;
-                                period = (p < 200) ? 200 : (p > 10000) ? 10000 : p;
-                            }
-                        }
-                        char ackurl[256];
-                        snprintf(ackurl, 256, "%s/api/v1/commands/%ld/ack", SRV, cid);
-                        cJSON *ack = cJSON_CreateObject();
-                        cJSON_AddStringToObject(ack, "device_id", DEVID);
-                        cJSON_AddStringToObject(ack, "boot_id", bootid);
-                        cJSON_AddStringToObject(ack, "result", "ok");
-                        char *acks = cJSON_PrintUnformatted(ack); cJSON_Delete(ack);
-                        postjson(ackurl, acks); free(acks);
-                        ESP_LOGI(TAG, "cmd %ld %s", cid, ctype);
-                    }
+            parsed_cmd_t pc;
+            if (parse_command(buf, &pc)) {
+                if (strcmp(pc.type, "set_led") == 0 && pc.has_value)
+                    setled(pc.value);
+                else if (strcmp(pc.type, "set_period") == 0 && pc.has_ms) {
+                    int p = pc.ms;
+                    period = (p < 200) ? 200 : (p > 10000) ? 10000 : p;
                 }
-                cJSON_Delete(root);
+                char ackurl[256];
+                snprintf(ackurl, 256, "%s/api/v1/commands/%ld/ack", SRV, pc.id);
+                cJSON *ack = cJSON_CreateObject();
+                cJSON_AddStringToObject(ack, "device_id", DEVID);
+                cJSON_AddStringToObject(ack, "boot_id", bootid);
+                cJSON_AddStringToObject(ack, "result", "ok");
+                char *acks = cJSON_PrintUnformatted(ack); cJSON_Delete(ack);
+                postjson(ackurl, acks); free(acks);
+                ESP_LOGI(TAG, "cmd %ld %s", pc.id, pc.type);
             }
         }
         vTaskDelay(pdMS_TO_TICKS(1000));

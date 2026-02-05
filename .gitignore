@@ -53,6 +53,7 @@ dependencies.lock
 managed_components/
 
 **/host_tests/test_telemetry_buf
+**/host_tests/test_cmd_parse
 node/build/
 
 target/

@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "app_main.c"
         "telemetry_buf.c"
+        "cmd_parse.c"
     INCLUDE_DIRS
         "."
     REQUIRES
