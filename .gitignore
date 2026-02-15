@@ -1,2 +1,3 @@
 node/host_tests/ring_buf_test
+node/host_tests/msg_test
 .vscode/

@@ -31,7 +31,7 @@ int main(void) {
         test_count(i);
     }
 
-    printf("\033[32mAll tests passed!\033[0m\n");
+    printf("\033[32mAll buffer tests passed!\033[0m\n");
     return 0;
 }
 
