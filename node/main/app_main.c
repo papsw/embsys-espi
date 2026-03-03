@@ -13,7 +13,7 @@
 
 #define WIFI_SSID     CONFIG_WIFI_SSID
 #define WIFI_PASS     CONFIG_WIFI_PASS
-#define WS_URI        CONFIG_PI_URI
+#define WS_URI        CONFIG_WS_URI
 #define TAG           "main"
 #define CONNECTED_BIT BIT0
 
@@ -35,6 +35,7 @@ void app_main(void) {
 
     ESP_LOGI(TAG, "wifi connected");
 
+    led_set(NET_ERROR);
     ws_init(WS_URI, on_ws_msg);
     ws_start();
 }
@@ -45,7 +46,7 @@ static void on_disconnect(void *, esp_event_base_t, int32_t, void *) {
 }
 
 static void on_got_ip(void *, esp_event_base_t, int32_t, void *) {
-    led_set(IDLE);
+    led_set(NET_ERROR);
     xEventGroupSetBits(s_wifi_eg, CONNECTED_BIT);
 }
 

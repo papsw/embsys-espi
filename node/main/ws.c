@@ -1,4 +1,5 @@
 #include "ws.h"
+#include "rgb.h"
 #include "esp_websocket_client.h"
 #include "esp_log.h"
 #include <stdbool.h>
@@ -14,11 +15,13 @@ static void ws_event_handler(void *arg, esp_event_base_t base, int32_t event_id,
     switch (event_id) {
         case WEBSOCKET_EVENT_CONNECTED:
             s_connected = true;
+            led_set(IDLE);
             ESP_LOGI("ws", "connected");
             break;
 
         case WEBSOCKET_EVENT_DISCONNECTED:
             s_connected = false;
+            led_set(NET_ERROR);
             ESP_LOGI("ws", "disconnected");
             break;
 

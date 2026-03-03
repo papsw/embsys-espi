@@ -23,9 +23,9 @@ static int                s_flash_b;
 
 
 static void set_color(int r, int g, int b) {
-    ledc_set_duty(LEDC_MODE, CH_R, 255 - r);   ledc_update_duty(LEDC_MODE, CH_R);
-    ledc_set_duty(LEDC_MODE, CH_G, 255 - g);   ledc_update_duty(LEDC_MODE, CH_G);
-    ledc_set_duty(LEDC_MODE, CH_B, 255 - b);   ledc_update_duty(LEDC_MODE, CH_B);
+    ledc_set_duty(LEDC_MODE, CH_R, 256 - r);   ledc_update_duty(LEDC_MODE, CH_R);
+    ledc_set_duty(LEDC_MODE, CH_G, 256 - g);   ledc_update_duty(LEDC_MODE, CH_G);
+    ledc_set_duty(LEDC_MODE, CH_B, 256 - b);   ledc_update_duty(LEDC_MODE, CH_B);
 }
 
 static void apply(void) {
@@ -73,7 +73,8 @@ void led_init(void) {
             .speed_mode = LEDC_MODE,
             .channel    = chs[i],
             .timer_sel  = LEDC_TIMER_0,
-            .duty       = 255,  //0 on 255 off
+            .intr_type  = LEDC_INTR_DISABLE,
+            .duty       = 256,  //0 on 256 off (2^8)
             .hpoint     = 0,
         };
         ledc_channel_config(&cc);

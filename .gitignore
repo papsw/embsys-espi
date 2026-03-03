@@ -6,3 +6,4 @@ node/sdkconfig.old
 .vscode/
 node/sdkconfig
 node/main/Kconfig.projbuild
+coordinator/target/
