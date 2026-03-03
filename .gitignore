@@ -4,3 +4,5 @@ node/managed_components/
 node/build/
 node/sdkconfig.old
 .vscode/
+node/sdkconfig
+node/main/Kconfig.projbuild

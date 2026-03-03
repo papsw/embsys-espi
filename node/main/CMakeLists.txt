@@ -10,4 +10,7 @@ idf_component_register(
         esp_websocket_client
     PRIV_REQUIRES
         esp_driver_ledc
+        nvs_flash
+        esp_wifi
+        esp_netif
 )
